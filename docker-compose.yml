@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: trdr
+      POSTGRES_USER: trdr
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD manquant dans .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trdr -d trdr"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://trdr:${POSTGRES_PASSWORD}@db:5432/trdr
+      # L'API ne parle jamais à Binance : elle ne reçoit pas les clés.
+      BINANCE_API_KEY: ""
+      BINANCE_API_SECRET: ""
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      # Accessible uniquement depuis le serveur ; Nginx s'occupe du HTTPS (voir deploy/nginx).
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build: ./backend
+    restart: unless-stopped
+    command: ["python", "-m", "trdr.bot"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://trdr:${POSTGRES_PASSWORD}@db:5432/trdr
+    depends_on:
+      # L'API crée les tables au démarrage : le robot attend qu'elle soit prête.
+      api:
+        condition: service_healthy
+
+volumes:
+  db-data:
